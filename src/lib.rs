@@ -8,9 +8,15 @@ fn mc_pricer(df: PyDataFrame, rate: f64, n_sims: i32) -> PyResult<PyDataFrame> {
     Ok(PyDataFrame(rdf))
 }
 
+#[pyfunction]
+fn mc_pricer_2(df: PyDataFrame, rate: f64, n_sims: i32) -> PyResult<PyDataFrame> {
+    let rdf = rust_pricer::mc_pricer_2(df.into(), rate, n_sims).map_err(PyPolarsErr::from)?;
+    Ok(PyDataFrame(rdf))
+}
 /// A Python module implemented in Rust.
 #[pymodule]
 fn rlib(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(mc_pricer, m)?)?;
+    m.add_function(wrap_pyfunction!(mc_pricer_2, m)?)?;
     Ok(())
 }
