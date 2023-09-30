@@ -2,8 +2,10 @@ import polars as pl
 import numpy as np
 from scipy import special
 
+__all__ = ["py_ref_pricer", "py_mc_pricer"]
 
-def ref_pricer(df: pl.DataFrame, rate: float) -> pl.DataFrame:
+
+def py_ref_pricer(df: pl.DataFrame, rate: float) -> pl.DataFrame:
     rate = pl.lit(rate)
     var_factor = pl.col("sigma") * pl.col("maturity").sqrt()
     d1 = (

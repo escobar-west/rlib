@@ -2,27 +2,7 @@ use polars::prelude::*;
 use rand::{thread_rng, Rng};
 use rand_distr::StandardNormal;
 
-pub fn mc_pricer(df: DataFrame, rate: f64, n_sims: i32) -> PolarsResult<DataFrame> {
-    let n_assets = df.height();
-    let mut rng = thread_rng();
-    let mut avg_price = 0.0.lit();
-    let df = df.lazy();
-    for _ in 0..n_sims {
-        let z: Series = (&mut rng)
-            .sample_iter::<f64, _>(StandardNormal)
-            .take(n_assets)
-            .collect();
-        let rand_walk = col("sigma") * col("maturity").sqrt() * z.lit();
-        let mean_drift: Expr = (rate.lit() - 0.5.lit() * col("sigma").pow(2)) * col("maturity");
-        let paths = col("asset_price") * (mean_drift + rand_walk).exp();
-        let payoff = ((-rate).lit() * col("maturity")).exp()
-            * (paths - col("strike")).clip_min(AnyValue::Float64(0.0));
-        avg_price = avg_price + payoff / (n_sims as f32).lit();
-    }
-    df.select(&[avg_price.alias("option_price")]).collect()
-}
-
-pub fn mc_pricer_2(df: DataFrame, rate: f64, n_sims: i32) -> PolarsResult<DataFrame> {
+pub fn rust_mc_pricer(mut df: DataFrame, rate: f64, n_sims: i32) -> PolarsResult<DataFrame> {
     let n_assets = df.height();
     let mut rng = thread_rng();
     let sigma: Vec<f64> = df
@@ -56,7 +36,7 @@ pub fn mc_pricer_2(df: DataFrame, rate: f64, n_sims: i32) -> PolarsResult<DataFr
         .collect();
     // discount_rate = ((-rate).lit() * col("maturity")).exp()
     let discount_rate: Vec<f64> = maturity.iter().map(|mat| (-rate * mat).exp()).collect();
-
+    // calc_buffer and option_prices are buffers to store calculations through sims
     let mut calc_buffer: Vec<f64> = vec![0.0; n_assets];
     let mut option_prices: Vec<f64> = vec![0.0; n_assets];
     for _ in 0..n_sims {
@@ -90,14 +70,17 @@ pub fn mc_pricer_2(df: DataFrame, rate: f64, n_sims: i32) -> PolarsResult<DataFr
         for (buff, d) in calc_buffer.iter_mut().zip(discount_rate.iter()) {
             *buff *= d;
         }
-        // update price with sim result (divide by n_sims comes later)
+        // update price with sim result
         for (price, b) in option_prices.iter_mut().zip(calc_buffer.iter()) {
             *price += b;
         }
     }
+    // normalize by n_sims
     for price in option_prices.iter_mut() {
         *price /= n_sims as f64;
     }
-    let output: Series = option_prices.into_iter().collect();
-    Ok(output.into_frame())
+    let mut output: Series = option_prices.into_iter().collect();
+    output.rename("option_price");
+    df.with_column(output)?;
+    Ok(df)
 }
