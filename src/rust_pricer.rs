@@ -43,26 +43,56 @@ pub fn mc_pricer_2(df: DataFrame, rate: f64, n_sims: i32) -> PolarsResult<DataFr
         .into_iter()
         .map(Option::unwrap)
         .collect();
-    let sqrt_maturity: Vec<f64> = df
+    let maturity: Vec<f64> = df
         .column("maturity")?
         .f64()?
         .into_iter()
-        .map(|x| x.unwrap().sqrt())
+        .map(Option::unwrap)
         .collect();
+    let sqrt_maturity: Vec<f64> = maturity.iter().map(|x| x.sqrt()).collect();
+    // mean_drift = (rate - 0.5 * sigma**2) * maturity
+    let mean_drift: Vec<f64> = std::iter::zip(sigma.iter(), maturity.iter())
+        .map(|(sig, mat)| mat * (rate - 0.5 * sig * sig))
+        .collect();
+    // discount_rate = ((-rate).lit() * col("maturity")).exp()
+    let discount_rate: Vec<f64> = maturity.iter().map(|mat| (-rate * mat).exp()).collect();
 
-    let mut rng_buffer: Vec<f64> = vec![0.0; n_assets];
+    let mut calc_buffer: Vec<f64> = vec![0.0; n_assets];
     let mut option_prices: Vec<f64> = vec![0.0; n_assets];
     for _ in 0..n_sims {
         // fill in rng values for single sim
-        for (buff, r) in rng_buffer
+        for (buff, r) in calc_buffer
             .iter_mut()
             .zip((&mut rng).sample_iter::<f64, _>(StandardNormal))
         {
             *buff = r;
         }
+        // let rand_walk = col("sigma") * col("maturity").sqrt() * z.lit();
+        for (buff, m) in calc_buffer.iter_mut().zip(sqrt_maturity.iter()) {
+            *buff *= m;
+        }
+        for (buff, s) in calc_buffer.iter_mut().zip(sigma.iter()) {
+            *buff *= s;
+        }
+        // let paths = col("asset_price") * (mean_drift + rand_walk).exp();
+        for (buff, m) in calc_buffer.iter_mut().zip(mean_drift.iter()) {
+            *buff += m;
+            *buff = (*buff).exp();
+        }
+        for (buff, a) in calc_buffer.iter_mut().zip(asset_price.iter()) {
+            *buff *= a;
+        }
+        // payoff = discount_rate * (paths - col("strike")).clip_min(AnyValue::Float64(0.0));
+        for (buff, s) in calc_buffer.iter_mut().zip(strike.iter()) {
+            *buff -= s;
+            *buff = (*buff).max(0.0);
+        }
+        for (buff, d) in calc_buffer.iter_mut().zip(discount_rate.iter()) {
+            *buff *= d;
+        }
         // update price with sim result (divide by n_sims comes later)
-        for (price, r) in option_prices.iter_mut().zip(rng_buffer.iter()) {
-            *price += r;
+        for (price, b) in option_prices.iter_mut().zip(calc_buffer.iter()) {
+            *price += b;
         }
     }
     for price in option_prices.iter_mut() {
