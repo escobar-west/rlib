@@ -35,11 +35,11 @@ pub fn rust_mc_pricer(mut df: DataFrame, rate: f64, n_paths: i32) -> PolarsResul
     let asset_price = get_as_vecf64(&df, "asset_price")?;
     let maturity = get_as_vecf64(&df, "maturity")?;
     let sqrt_maturity: Vec<f64> = maturity.iter().map(|x| x.sqrt()).collect();
-    // mean_drift = (rate - 0.5 * sigma**2) * maturity
+    // mean_drift = maturity * (rate - 0.5 * sigma**2)
     let mean_drift: Vec<f64> = std::iter::zip(sigma.iter(), maturity.iter())
         .map(|(sig, mat)| mat * (rate - 0.5 * sig * sig))
         .collect();
-    // discount_rate = ((-rate).lit() * col("maturity")).exp()
+    // discount_rate = (-rate * maturity).exp()
     let discount_rate: Vec<f64> = maturity.iter().map(|mat| (-rate * mat).exp()).collect();
     let mut option_prices = run_mc_sim(
         n_assets,
@@ -51,7 +51,7 @@ pub fn rust_mc_pricer(mut df: DataFrame, rate: f64, n_paths: i32) -> PolarsResul
         &mean_drift,
         &discount_rate,
     );
-    // normalize by n_paths
+    // normalize to get mean
     for price in option_prices.iter_mut() {
         *price /= n_paths as f64;
     }
@@ -98,7 +98,7 @@ pub fn rust_par_mc_pricer(mut df: DataFrame, rate: f64, n_paths: i32) -> PolarsR
                 a
             },
         );
-    // normalize by number of paths that actually ran
+    // normalize to get mean
     for price in option_prices.iter_mut() {
         *price /= (paths_per_core * n_cores) as f64;
     }
@@ -106,15 +106,6 @@ pub fn rust_par_mc_pricer(mut df: DataFrame, rate: f64, n_paths: i32) -> PolarsR
     output.rename("option_price");
     df.with_column(output)?;
     Ok(df)
-}
-
-fn get_as_vecf64(df: &DataFrame, col: &str) -> PolarsResult<Vec<f64>> {
-    Ok(df
-        .column(col)?
-        .f64()?
-        .into_iter()
-        .map(Option::unwrap)
-        .collect())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -132,7 +123,7 @@ fn run_mc_sim(
     let mut calc_buffer: Vec<f64> = vec![0.0; n_assets];
     let mut price_buffer: Vec<f64> = vec![0.0; n_assets];
     for _ in 0..n_paths {
-        // start with z = standard normal rv for single path
+        // load RV z into calc_buffer to begin path calculation
         for (buff, z) in calc_buffer
             .iter_mut()
             .zip((&mut rng).sample_iter::<f64, _>(StandardNormal))
@@ -154,10 +145,19 @@ fn run_mc_sim(
             *buff = (*buff).max(0.0);
         });
         buff_op(&mut calc_buffer, discount_rate, |buff, d| *buff *= d);
-        // update price with path result
-        buff_op(&mut price_buffer, &calc_buffer, |price, b| *price += b);
+        // add final path result to price_buffer
+        buff_op(&mut price_buffer, &calc_buffer, |price, c| *price += c);
     }
     price_buffer
+}
+
+fn get_as_vecf64(df: &DataFrame, col: &str) -> PolarsResult<Vec<f64>> {
+    Ok(df
+        .column(col)?
+        .f64()?
+        .into_iter()
+        .map(Option::unwrap)
+        .collect())
 }
 
 // b := op(b, s);

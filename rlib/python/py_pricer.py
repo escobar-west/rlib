@@ -1,15 +1,29 @@
 import polars as pl
+import pandas as pd
 import numpy as np
 from scipy import special
 
-__all__ = ["py_ref_pricer", "py_mc_pricer"]
+__all__ = ["py_pandas_pricer", "py_ref_pricer", "py_mc_pricer"]
+
+
+def py_pandas_pricer(df: pd.DataFrame, rate: float) -> pd.DataFrame:
+    var_factor = df["sigma"] * np.sqrt(df["maturity"])
+    d1 = (
+        df["maturity"] * (rate + 0.5 * df["sigma"] * df["sigma"])
+        + np.log(df["asset_price"] / df["strike"])
+    ) / var_factor
+    d2 = d1 - var_factor
+    df["option_price"] = (
+        norm_cdf(d1) * df["asset_price"]
+        - norm_cdf(d2) * np.exp(-rate * df["maturity"]) * df["strike"]
+    )
+    return df
 
 
 def py_ref_pricer(df: pl.DataFrame, rate: float) -> pl.DataFrame:
-    rate = pl.lit(rate)
     var_factor = pl.col("sigma") * pl.col("maturity").sqrt()
     d1 = (
-        pl.col("maturity") * (rate + 0.5 * pl.col("sigma") ** 2)
+        pl.col("maturity") * (rate + 0.5 * pl.col("sigma") * pl.col("sigma"))
         + (pl.col("asset_price") / pl.col("strike")).log()
     ) / var_factor
     d2 = d1 - var_factor
@@ -36,5 +50,5 @@ def py_mc_pricer(df: pl.DataFrame, rate: float, n_paths: int) -> pl.DataFrame:
     return df
 
 
-def norm_cdf(x: pl.Series):
+def norm_cdf(x):
     return 0.5 * (1 + special.erf(x / np.sqrt(2)))
