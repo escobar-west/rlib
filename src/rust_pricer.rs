@@ -1,7 +1,7 @@
-use polars::prelude::*;
+use polars::prelude::{col, DataFrame, Expr, IntoLazy, Literal, PolarsResult, Series};
 use rand::{thread_rng, Rng};
 use rand_distr::StandardNormal;
-use rayon::prelude::*;
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use statrs::distribution::{ContinuousCDF, Normal};
 
 pub fn rust_ref_pricer(df: DataFrame, rate: f64) -> PolarsResult<DataFrame> {
@@ -28,6 +28,7 @@ pub fn rust_ref_pricer(df: DataFrame, rate: f64) -> PolarsResult<DataFrame> {
         .collect()?;
     Ok(df)
 }
+
 pub fn rust_mc_pricer(mut df: DataFrame, rate: f64, n_paths: i32) -> PolarsResult<DataFrame> {
     let n_assets = df.height();
     let sigma = get_as_vecf64(&df, "sigma")?;
