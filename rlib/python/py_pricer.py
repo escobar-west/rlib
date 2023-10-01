@@ -20,13 +20,13 @@ def py_ref_pricer(df: pl.DataFrame, rate: float) -> pl.DataFrame:
     return df
 
 
-def py_mc_pricer(df: pl.DataFrame, rate: float, n_sims: int) -> pl.DataFrame:
+def py_mc_pricer(df: pl.DataFrame, rate: float, n_paths: int) -> pl.DataFrame:
     sigma = df["sigma"].view().reshape(-1, 1)
     maturity = df["maturity"].view().reshape(-1, 1)
     strike = df["strike"].view().reshape(-1, 1)
     asset_price = df["asset_price"].view().reshape(-1, 1)
 
-    Z = np.random.normal(size=(df.height, n_sims))
+    Z = np.random.normal(size=(df.height, n_paths))
     rand_walk = sigma * np.sqrt(maturity) * Z
     mean_drift = (rate - 0.5 * sigma**2) * maturity
     paths = asset_price * np.exp(mean_drift + rand_walk)
