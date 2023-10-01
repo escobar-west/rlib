@@ -43,11 +43,11 @@ pub fn rust_par_mc_pricer(mut df: DataFrame, rate: f64, n_paths: i32) -> PolarsR
     let asset_price = get_as_vecf64(&df, "asset_price")?;
     let maturity = get_as_vecf64(&df, "maturity")?;
     let sqrt_maturity: Vec<f64> = maturity.iter().map(|x| x.sqrt()).collect();
-    // mean_drift = (rate - 0.5 * sigma**2) * maturity
+    // mean_drift = maturity * (rate - 0.5 * sigma**2)
     let mean_drift: Vec<f64> = std::iter::zip(sigma.iter(), maturity.iter())
         .map(|(sig, mat)| mat * (rate - 0.5 * sig * sig))
         .collect();
-    // discount_rate = ((-rate).lit() * col("maturity")).exp()
+    // discount_rate = (-rate * maturity).exp()
     let discount_rate: Vec<f64> = maturity.iter().map(|mat| (-rate * mat).exp()).collect();
     let n_cores = std::thread::available_parallelism()?.get() as i32;
     let paths_per_core = n_paths / n_cores;
@@ -108,40 +108,39 @@ fn run_mc_sim(
     let mut calc_buffer: Vec<f64> = vec![0.0; n_assets];
     let mut price_buffer: Vec<f64> = vec![0.0; n_assets];
     for _ in 0..n_paths {
-        // fill in rng values for single path
-        for (buff, r) in calc_buffer
+        // start with z = standard normal rv for single path
+        for (buff, z) in calc_buffer
             .iter_mut()
             .zip((&mut rng).sample_iter::<f64, _>(StandardNormal))
         {
-            *buff = r;
+            *buff = z;
         }
-        // let rand_walk = col("sigma") * col("maturity").sqrt() * z.lit();
-        for (buff, m) in calc_buffer.iter_mut().zip(sqrt_maturity.iter()) {
-            *buff *= m;
-        }
-        for (buff, s) in calc_buffer.iter_mut().zip(sigma.iter()) {
-            *buff *= s;
-        }
-        // let paths = col("asset_price") * (mean_drift + rand_walk).exp();
-        for (buff, m) in calc_buffer.iter_mut().zip(mean_drift.iter()) {
+        // rand_walk = sigma * maturity.sqrt() * z;
+        update_buffer(&mut calc_buffer, sqrt_maturity, |buff, m| *buff *= m);
+        update_buffer(&mut calc_buffer, sigma, |buff, s| *buff *= s);
+        // paths = asset_price * (mean_drift + rand_walk).exp();
+        update_buffer(&mut calc_buffer, mean_drift, |buff, m| {
             *buff += m;
             *buff = (*buff).exp();
-        }
-        for (buff, a) in calc_buffer.iter_mut().zip(asset_price.iter()) {
-            *buff *= a;
-        }
-        // payoff = discount_rate * (paths - col("strike")).clip_min(AnyValue::Float64(0.0));
-        for (buff, s) in calc_buffer.iter_mut().zip(strike.iter()) {
+        });
+        update_buffer(&mut calc_buffer, asset_price, |buff, a| *buff *= a);
+        // payoff = discount_rate * max(paths - strike, 0);
+        update_buffer(&mut calc_buffer, strike, |buff, s| {
             *buff -= s;
             *buff = (*buff).max(0.0);
-        }
-        for (buff, d) in calc_buffer.iter_mut().zip(discount_rate.iter()) {
-            *buff *= d;
-        }
+        });
+        update_buffer(&mut calc_buffer, discount_rate, |buff, d| *buff *= d);
         // update price with path result
-        for (price, b) in price_buffer.iter_mut().zip(calc_buffer.iter()) {
-            *price += b;
-        }
+        update_buffer(&mut price_buffer, &calc_buffer, |price, b| *price += b);
     }
     price_buffer
+}
+
+fn update_buffer<F>(buffer: &mut [f64], source: &[f64], mut func: F)
+where
+    F: FnMut(&mut f64, &f64),
+{
+    for (b, a) in buffer.iter_mut().zip(source.iter()) {
+        func(b, a);
+    }
 }

@@ -25,12 +25,13 @@ def py_mc_pricer(df: pl.DataFrame, rate: float, n_paths: int) -> pl.DataFrame:
     maturity = df["maturity"].view().reshape(-1, 1)
     strike = df["strike"].view().reshape(-1, 1)
     asset_price = df["asset_price"].view().reshape(-1, 1)
+    mean_drift = (rate - 0.5 * sigma**2) * maturity
+    discount_rate = np.exp(-rate * maturity)
 
     Z = np.random.normal(size=(df.height, n_paths))
     rand_walk = sigma * np.sqrt(maturity) * Z
-    mean_drift = (rate - 0.5 * sigma**2) * maturity
     paths = asset_price * np.exp(mean_drift + rand_walk)
-    exp_payoff = (np.exp(-rate * maturity) * np.maximum(paths - strike, 0)).mean(axis=1)
+    exp_payoff = (discount_rate * np.maximum(paths - strike, 0)).mean(axis=1)
     df = df.with_columns(option_price=pl.Series(exp_payoff))
     return df
 
