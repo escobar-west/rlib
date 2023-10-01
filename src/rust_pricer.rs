@@ -2,7 +2,40 @@ use polars::prelude::*;
 use rand::{thread_rng, Rng};
 use rand_distr::StandardNormal;
 use rayon::prelude::*;
+use statrs::distribution::{ContinuousCDF, Normal};
 
+pub fn rust_ref_pricer(df: DataFrame, rate: f64) -> PolarsResult<DataFrame> {
+    let rate = rate.lit();
+    let var_factor = col("sigma") * col("maturity").sqrt();
+    let d1 = (col("maturity") * (rate.clone() + 0.5.lit() * col("sigma") * col("sigma"))
+        + (col("asset_price") / col("strike"))
+            .map(|s| smap(s, f64::ln), std::default::Default::default()))
+        / var_factor.clone();
+    let d2 = d1.clone() - var_factor;
+    let option_price = col("asset_price")
+        * d1.map(
+            |s| {
+                let n = Normal::new(0.0, 1.0).unwrap();
+                smap(s, |x| n.cdf(x))
+            },
+            std::default::Default::default(),
+        )
+        - col("strike")
+            * ((-1).lit() * rate * col("maturity"))
+                .map(|s| smap(s, f64::exp), std::default::Default::default())
+            * d2.map(
+                |s| {
+                    let n = Normal::new(0.0, 1.0).unwrap();
+                    smap(s, |x| n.cdf(x))
+                },
+                std::default::Default::default(),
+            );
+    let df = df
+        .lazy()
+        .with_column(option_price.alias("option_price"))
+        .collect()?;
+    Ok(df)
+}
 pub fn rust_mc_pricer(mut df: DataFrame, rate: f64, n_paths: i32) -> PolarsResult<DataFrame> {
     let n_assets = df.height();
     let sigma = get_as_vecf64(&df, "sigma")?;
@@ -143,4 +176,12 @@ where
     for (b, a) in buffer.iter_mut().zip(source.iter()) {
         func(b, a);
     }
+}
+
+fn smap<F>(s: Series, f: F) -> PolarsResult<Option<Series>>
+where
+    F: Fn(f64) -> f64,
+{
+    let out: Series = s.f64()?.into_iter().map(|x| f(x.unwrap())).collect();
+    Ok(Some(out))
 }
