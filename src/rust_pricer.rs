@@ -8,28 +8,20 @@ pub fn rust_ref_pricer(df: DataFrame, rate: f64) -> PolarsResult<DataFrame> {
     let rate = rate.lit();
     let var_factor = col("sigma") * col("maturity").sqrt();
     let d1 = (col("maturity") * (rate.clone() + 0.5.lit() * col("sigma") * col("sigma"))
-        + (col("asset_price") / col("strike"))
-            .map(|s| smap(s, f64::ln), std::default::Default::default()))
+        + smap(col("asset_price") / col("strike"), f64::ln))
         / var_factor.clone();
     let d2 = d1.clone() - var_factor;
     let option_price = col("asset_price")
-        * d1.map(
-            |s| {
-                let n = Normal::new(0.0, 1.0).unwrap();
-                smap(s, |x| n.cdf(x))
-            },
-            std::default::Default::default(),
-        )
+        * smap(d1, |x| {
+            let n = Normal::new(0.0, 1.0).unwrap();
+            n.cdf(x)
+        })
         - col("strike")
-            * ((-1).lit() * rate * col("maturity"))
-                .map(|s| smap(s, f64::exp), std::default::Default::default())
-            * d2.map(
-                |s| {
-                    let n = Normal::new(0.0, 1.0).unwrap();
-                    smap(s, |x| n.cdf(x))
-                },
-                std::default::Default::default(),
-            );
+            * smap((-1).lit() * rate * col("maturity"), f64::exp)
+            * smap(d2, |x| {
+                let n = Normal::new(0.0, 1.0).unwrap();
+                n.cdf(x)
+            });
     let df = df
         .lazy()
         .with_column(option_price.alias("option_price"))
@@ -101,10 +93,9 @@ pub fn rust_par_mc_pricer(mut df: DataFrame, rate: f64, n_paths: i32) -> PolarsR
         })
         .reduce(
             || vec![0.0; n_assets],
-            |a: Vec<f64>, b: Vec<f64>| {
-                std::iter::zip(a.iter(), b.iter())
-                    .map(|(elem_a, elem_b)| elem_a + elem_b)
-                    .collect()
+            |mut a: Vec<f64>, b: Vec<f64>| {
+                buff_op(&mut a, &b, |elem_a, elem_b| *elem_a += elem_b);
+                a
             },
         );
     // normalize by number of paths that actually ran
@@ -149,39 +140,46 @@ fn run_mc_sim(
             *buff = z;
         }
         // rand_walk = sigma * maturity.sqrt() * z;
-        update_buffer(&mut calc_buffer, sqrt_maturity, |buff, m| *buff *= m);
-        update_buffer(&mut calc_buffer, sigma, |buff, s| *buff *= s);
+        buff_op(&mut calc_buffer, sqrt_maturity, |buff, m| *buff *= m);
+        buff_op(&mut calc_buffer, sigma, |buff, s| *buff *= s);
         // paths = asset_price * (mean_drift + rand_walk).exp();
-        update_buffer(&mut calc_buffer, mean_drift, |buff, m| {
+        buff_op(&mut calc_buffer, mean_drift, |buff, m| {
             *buff += m;
             *buff = (*buff).exp();
         });
-        update_buffer(&mut calc_buffer, asset_price, |buff, a| *buff *= a);
+        buff_op(&mut calc_buffer, asset_price, |buff, a| *buff *= a);
         // payoff = discount_rate * max(paths - strike, 0);
-        update_buffer(&mut calc_buffer, strike, |buff, s| {
+        buff_op(&mut calc_buffer, strike, |buff, s| {
             *buff -= s;
             *buff = (*buff).max(0.0);
         });
-        update_buffer(&mut calc_buffer, discount_rate, |buff, d| *buff *= d);
+        buff_op(&mut calc_buffer, discount_rate, |buff, d| *buff *= d);
         // update price with path result
-        update_buffer(&mut price_buffer, &calc_buffer, |price, b| *price += b);
+        buff_op(&mut price_buffer, &calc_buffer, |price, b| *price += b);
     }
     price_buffer
 }
 
-fn update_buffer<F>(buffer: &mut [f64], source: &[f64], mut func: F)
+// b := op(b, s);
+fn buff_op<F>(buffer: &mut [f64], source: &[f64], mut op: F)
 where
     F: FnMut(&mut f64, &f64),
 {
-    for (b, a) in buffer.iter_mut().zip(source.iter()) {
-        func(b, a);
+    for (b, s) in buffer.iter_mut().zip(source.iter()) {
+        op(b, s);
     }
 }
 
-fn smap<F>(s: Series, f: F) -> PolarsResult<Option<Series>>
+// smap(S[x], f) = S[f(x)];
+fn smap<F>(expr: Expr, f: F) -> Expr
 where
-    F: Fn(f64) -> f64,
+    F: Fn(f64) -> f64 + Send + Sync + 'static,
 {
-    let out: Series = s.f64()?.into_iter().map(|x| f(x.unwrap())).collect();
-    Ok(Some(out))
+    expr.map(
+        move |s| {
+            let out: Series = s.f64()?.into_iter().map(|x| f(x.unwrap())).collect();
+            Ok(Some(out))
+        },
+        std::default::Default::default(),
+    )
 }
