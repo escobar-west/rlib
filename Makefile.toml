@@ -1,0 +1,19 @@
+[tasks.format]
+command = "cargo"
+args = ["fmt"]
+
+[tasks.black]
+command = "black"
+args = ["."]
+
+[tasks.check]
+command = "cargo"
+args = ["check"]
+
+[tasks.develop]
+command = "maturin"
+args = ["develop"]
+dependencies = ["format", "black"]
+
+[tasks.default]
+alias = "develop"

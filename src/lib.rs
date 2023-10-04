@@ -23,7 +23,8 @@ fn rust_par_mc_pricer(df: PyDataFrame, rate: f64, n_paths: i32) -> PyResult<PyDa
 
 /// A Python module implemented in Rust.
 #[pymodule]
-fn rlib(_py: Python, m: &PyModule) -> PyResult<()> {
+#[pyo3(name = "_rust")]
+fn setup_module(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(rust_ref_pricer, m)?)?;
     m.add_function(wrap_pyfunction!(rust_mc_pricer, m)?)?;
     m.add_function(wrap_pyfunction!(rust_par_mc_pricer, m)?)?;
