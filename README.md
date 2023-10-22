@@ -1,6 +1,6 @@
 # Rlib
 
-POC multi-threaded library for pricing financial derivatives.
+POC multi-threaded library for pricing financial derivatives. The math is implemented in Rust where the multithreading happens, so it's very fast.
 
 ## Python API
 
@@ -25,7 +25,7 @@ shape: (5, 4)
 │ 114.312273 ┆ 91.680799   ┆ 0.212748 ┆ 1.345785 │
 └────────────┴─────────────┴──────────┴──────────┘
 
-# run multi-threaded mc simulation with one million paths
+# run multi-threaded mc simulation with one million paths for risk-free rate of 1%
 >>> rlib.rust_par_mc_pricer(df, 0.01, 1_000_000)
 shape: (10, 5)
 ┌────────────┬─────────────┬──────────┬──────────┬──────────────┐
